@@ -5,6 +5,10 @@ from elasticsearch import Elasticsearch, RequestsHttpConnection
 from elasticsearch import helpers
 
 
+def extract(res):
+    return [x['_source'] for x in res['hits']['hits']]
+
+
 class ESDemo:
     def __init__(self, map_info):
         self.es = Elasticsearch("http://localhost:9200/")
@@ -22,10 +26,10 @@ class ESDemo:
             self.es.index(index=index_name, body=r)
         self.es.indices.refresh()
 
-    # product number 2개 이상 겹치는 유저한테 가서 그 아이템 받아오기
+    # find users who have more than 2 products in common and get those items
     def get_recommendation(self, index_name, target_user_id):
-        target_user_items = []
-        res = self.es.search(
+        # find products of target user
+        item_res = self.es.search(
             index=index_name,
             body={
                 "query": {
@@ -35,4 +39,28 @@ class ESDemo:
                 }
             }
         )
-        print(res)
+        target_user_items = extract(item_res)[0]['products']
+
+        # make term queries out of those items and get recommendation
+        rec_res = self.es.search(
+              index=index_name,
+              body={
+                "query": {
+                  "bool": {
+                    "should": [{"term": {"products": x}} for x in target_user_items],
+                    "minimum_should_match": 2,
+                  }
+                },
+                "aggs": {
+                  "recommendations": {
+                    "significant_terms": {
+                      "field": "products",
+                      "exclude": target_user_items,
+                      "min_doc_count": 10
+                    }
+                  }
+                }
+              }
+            )
+        recommended_items = [x['key'] for x in rec_res['aggregations']['recommendations']['buckets']]
+        print(recommended_items)
